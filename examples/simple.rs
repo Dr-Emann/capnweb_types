@@ -15,4 +15,8 @@ fn main() {
 
     let res = serde_json::to_string(&msg).unwrap();
     println!("{}", res);
+
+    // let de: Expression = serde_json::from_str(r#"[[1, 2]]"#).unwrap();
+    let de: Message = serde_json::from_str(&res).unwrap();
+    println!("{:?}", de);
 }

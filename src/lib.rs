@@ -9,9 +9,11 @@
 //! [capnweb]: https://github.com/cloudflare/capnweb
 #![deny(missing_docs)]
 
-use serde::Serializer;
+use serde::de::{SeqAccess, Unexpected};
+use serde::{Deserializer, Serializer};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 
 type Str<'a> = Cow<'a, str>;
 
@@ -183,12 +185,20 @@ pub enum Expression<'a> {
 }
 
 /// An import or export captured for use in a [`Expression::Remap`] instruction
-#[derive(Debug, Copy, Clone)]
-pub enum Capture {
-    /// Capture an import by id
-    Import(Id),
-    /// Capture an export by id
-    Export(Id),
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct Capture {
+    ty: CaptureType,
+    id: Id,
+}
+
+/// The type of a captured import or export for a [`Expression::Remap`] instruction
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureType {
+    /// Capture an import for the remap instructions
+    Import,
+    /// Capture an export for the remap instructions
+    Export,
 }
 
 impl serde::Serialize for Capture {
@@ -196,10 +206,17 @@ impl serde::Serialize for Capture {
     where
         S: Serializer,
     {
-        match self {
-            Capture::Import(id) => ("import", id).serialize(serializer),
-            Capture::Export(id) => ("export", id).serialize(serializer),
-        }
+        (self.ty, self.id).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Capture {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let (ty, id) = <(CaptureType, Id)>::deserialize(deserializer)?;
+        Ok(Capture { ty, id })
     }
 }
 
@@ -239,7 +256,9 @@ impl serde::Serialize for Expression<'_> {
                 };
                 match operation {
                     None => (ty_str, id).serialize(serializer),
-                    Some(ImportOperation::Prop { path }) => (ty_str, id, path).serialize(serializer),
+                    Some(ImportOperation::Prop { path }) => {
+                        (ty_str, id, path).serialize(serializer)
+                    }
                     Some(ImportOperation::Call { path, args }) => {
                         (ty_str, id, path, args).serialize(serializer)
                     }
@@ -264,6 +283,207 @@ impl serde::Serialize for Expression<'_> {
             }
             Expression::Array(inner) => (inner,).serialize(serializer),
         }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Expression<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Expression<'de>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("a valid Cap'n Web expression")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::Bool(v))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::Int(v))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if let Ok(v) = i64::try_from(v) {
+                    Ok(Expression::Int(v))
+                } else {
+                    Err(E::invalid_value(
+                        serde::de::Unexpected::Unsigned(v),
+                        &"a 64 bit signed integer",
+                    ))
+                }
+            }
+
+            fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::Float(v))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_string(String::from(v))
+            }
+
+            fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::String(Cow::Borrowed(v)))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::String(Cow::Owned(v)))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Expression::Null)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                #[derive(Debug, serde::Deserialize)]
+                #[serde(untagged)]
+                enum StringOrArray<'a> {
+                    #[serde(borrow)]
+                    String(Str<'a>),
+                    #[serde(borrow)]
+                    Array(Box<[Expression<'a>]>),
+                }
+                let first_value: StringOrArray = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+                let kind = match first_value {
+                    StringOrArray::String(kind) => kind,
+                    StringOrArray::Array(arr) => {
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(2, &self));
+                        }
+                        return Ok(Expression::Array(arr));
+                    }
+                };
+                match &*kind {
+                    "date" => {
+                        let expected = "a date expression";
+                        let timestamp: f64 = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Expression::Date(timestamp))
+                    }
+                    "error" => {
+                        let expected = "an error expression";
+                        let ty: Str<'de> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let message: Str<'de> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(2, &expected))?;
+                        let stack: Option<Str<'de>> = seq.next_element()?;
+                        // Intentionally allow extra elements, for forward compatibility
+                        Ok(Expression::Error(Box::new(Error { ty, message, stack })))
+                    }
+                    "import" | "pipeline" => {
+                        let expected = "an import or pipeline expression";
+                        let resolution = if kind == "import" {
+                            Resolution::Stub
+                        } else {
+                            Resolution::Promise
+                        };
+                        let id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let operation = if let Some(path) = seq.next_element::<Path<'de>>()? {
+                            if let Some(args) = seq.next_element::<Box<[Expression<'de>]>>()? {
+                                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                                    return Err(serde::de::Error::invalid_length(4, &expected));
+                                }
+                                Some(ImportOperation::Call { path, args })
+                            } else {
+                                Some(ImportOperation::Prop { path })
+                            }
+                        } else {
+                            None
+                        };
+                        Ok(Expression::Import {
+                            id,
+                            operation,
+                            resolution,
+                        })
+                    }
+                    "remap" => {
+                        let expected = "a remap expression";
+                        let import_id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let property_path: Path<'de> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(2, &expected))?;
+                        let captures: Box<[Capture]> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(3, &expected))?;
+                        let instructions: Box<[Expression<'de>]> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(4, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(5, &"a remap expression"));
+                        }
+                        Ok(Expression::Remap(Box::new(Remap {
+                            import_id,
+                            property_path,
+                            captures,
+                            instructions,
+                        })))
+                    }
+                    "export" | "promise" => {
+                        let expected = "an export or promise expression";
+                        let resolution = if kind == "export" {
+                            Resolution::Stub
+                        } else {
+                            Resolution::Promise
+                        };
+                        let id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Expression::Export { id, resolution })
+                    }
+                    other_kind => Err(serde::de::Error::invalid_value(
+                        Unexpected::Str(other_kind),
+                        &"a valid Cap'n Web expression kind",
+                    )),
+                }
+            }
+        }
+        deserializer.deserialize_any(Visitor)
     }
 }
 
@@ -349,5 +569,111 @@ impl serde::Serialize for Message<'_> {
             } => ("release", import_id, refcount).serialize(serializer),
             Message::Abort(expr) => ("abort", expr).serialize(serializer),
         }
+    }
+}
+
+impl<'de> serde::de::Deserialize<'de> for Message<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Message<'de>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("a valid Cap'n Web top-level message")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let kind: Str<'de> = seq.next_element()?.ok_or_else(|| {
+                    serde::de::Error::invalid_length(1, &"an array starting with a string")
+                })?;
+                match &*kind {
+                    "push" => {
+                        let expected = "a push message";
+                        let expr: Expression = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Message::Push(expr))
+                    }
+                    "pull" => {
+                        let expected = "a pull message";
+                        let id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Message::Pull(id))
+                    }
+                    "resolve" => {
+                        let expected = "a resolve message";
+                        let export_id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let value: Expression = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(2, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(4, &expected));
+                        }
+                        Ok(Message::Resolve { export_id, value })
+                    }
+                    "reject" => {
+                        let expected = "a reject message";
+                        let export_id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let value: Expression = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(2, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(4, &expected));
+                        }
+                        Ok(Message::Reject { export_id, value })
+                    }
+                    "release" => {
+                        let expected = "a release message";
+                        let import_id: Id = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        let refcount: u64 = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(2, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(4, &expected));
+                        }
+                        Ok(Message::Release {
+                            import_id,
+                            refcount,
+                        })
+                    }
+                    "abort" => {
+                        let expected = "an abort message";
+                        let expr: Expression = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Message::Abort(expr))
+                    }
+                    other_kind => Err(serde::de::Error::invalid_value(
+                        Unexpected::Str(other_kind),
+                        &"a valid Cap'n Web top-level message kind",
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_seq(Visitor)
     }
 }

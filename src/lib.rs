@@ -187,8 +187,10 @@ pub enum Expression<'a> {
 /// An import or export captured for use in a [`Expression::Remap`] instruction
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Capture {
-    ty: CaptureType,
-    id: Id,
+    /// The type of the captured import or export
+    pub ty: CaptureType,
+    /// The ID of the captured import or export
+    pub id: Id,
 }
 
 /// The type of a captured import or export for a [`Expression::Remap`] instruction
@@ -362,6 +364,17 @@ impl<'de> serde::Deserialize<'de> for Expression<'de> {
                 Ok(Expression::Null)
             }
 
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut obj = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry()? {
+                    obj.insert(key, value);
+                }
+                Ok(Expression::Object(obj))
+            }
+
             fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
             where
                 A: SeqAccess<'de>,
@@ -408,6 +421,33 @@ impl<'de> serde::Deserialize<'de> for Expression<'de> {
                         let stack: Option<Str<'de>> = seq.next_element()?;
                         // Intentionally allow extra elements, for forward compatibility
                         Ok(Expression::Error(Box::new(Error { ty, message, stack })))
+                    }
+                    "undefined" => {
+                        let expected = "an undefined expression";
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(2, &expected));
+                        }
+                        Ok(Expression::Undefined)
+                    }
+                    "bytes" => {
+                        let expected = "a bytes expression";
+                        let data: Str<'de> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Expression::Bytes(data))
+                    }
+                    "bigint" => {
+                        let expected = "a bigint expression";
+                        let data: Str<'de> = seq
+                            .next_element()?
+                            .ok_or_else(|| serde::de::Error::invalid_length(1, &expected))?;
+                        if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                            return Err(serde::de::Error::invalid_length(3, &expected));
+                        }
+                        Ok(Expression::BigInt(data))
                     }
                     "import" | "pipeline" => {
                         let expected = "an import or pipeline expression";

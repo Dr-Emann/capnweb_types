@@ -1,0 +1,10 @@
+---
+source: tests/lib_tests.rs
+expression: special_key_obj
+---
+{
+  "key with spaces": 1,
+  "key-with-dashes": 2,
+  "keyWithCamelCase": 4,
+  "key_with_underscores": 3
+}

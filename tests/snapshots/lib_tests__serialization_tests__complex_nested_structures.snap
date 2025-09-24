@@ -1,0 +1,45 @@
+---
+source: tests/lib_tests.rs
+expression: complex_expr
+---
+{
+  "level1": {
+    "level2": {
+      "level3": {
+        "array": [
+          [
+            1,
+            2,
+            {
+              "nested": "deep"
+            }
+          ]
+        ],
+        "date": [
+          "date",
+          5678.0
+        ],
+        "nullVal": null,
+        "undefinedVal": [
+          "undefined"
+        ]
+      }
+    }
+  },
+  "top_array": [
+    [
+      [
+        [
+          1,
+          2
+        ]
+      ],
+      [
+        [
+          3,
+          4
+        ]
+      ]
+    ]
+  ]
+}

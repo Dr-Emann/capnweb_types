@@ -1,0 +1,5 @@
+---
+source: tests/lib_tests.rs
+expression: unicode_string
+---
+"Hello, 世界! 🌍"

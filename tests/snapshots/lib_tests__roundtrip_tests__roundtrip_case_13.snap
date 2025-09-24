@@ -1,0 +1,9 @@
+---
+source: tests/lib_tests.rs
+expression: original
+---
+[
+  "error",
+  "TypeError",
+  "test error"
+]

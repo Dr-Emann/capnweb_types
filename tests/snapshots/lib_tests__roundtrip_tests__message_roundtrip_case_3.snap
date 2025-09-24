@@ -1,0 +1,13 @@
+---
+source: tests/lib_tests.rs
+expression: original
+---
+[
+  "reject",
+  -10,
+  [
+    "error",
+    "Error",
+    "failed"
+  ]
+]

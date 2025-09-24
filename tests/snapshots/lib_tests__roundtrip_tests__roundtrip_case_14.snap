@@ -1,0 +1,11 @@
+---
+source: tests/lib_tests.rs
+expression: original
+---
+[
+  [
+    1,
+    "two",
+    true
+  ]
+]

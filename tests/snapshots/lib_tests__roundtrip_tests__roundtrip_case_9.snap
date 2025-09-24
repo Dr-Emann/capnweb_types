@@ -1,0 +1,7 @@
+---
+source: tests/lib_tests.rs
+expression: original
+---
+[
+  "undefined"
+]

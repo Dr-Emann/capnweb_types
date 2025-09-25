@@ -11,6 +11,7 @@
 
 use serde::de::{SeqAccess, Unexpected};
 use serde::{Deserializer, Serializer};
+use serde_core as serde;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
@@ -40,13 +41,69 @@ type Str<'a> = Cow<'a, str>;
 pub type Id = i64;
 
 /// A segment in a property path, either a property name or an array index.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 pub enum PathSegment<'a> {
     /// A property name
     Name(Str<'a>),
     /// An array index
     Index(u64),
+}
+
+impl serde::Serialize for PathSegment<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            PathSegment::Name(name) => serializer.serialize_str(name),
+            PathSegment::Index(index) => serializer.serialize_u64(*index),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PathSegment<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PathSegment<'de>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or a number")
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PathSegment::Index(v))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_string(String::from(v))
+            }
+
+            fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PathSegment::Name(Cow::Borrowed(v)))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(PathSegment::Name(Cow::Owned(v)))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 /// A list of property names (strings or numbers) leading to a specific property of the import's target
@@ -194,13 +251,52 @@ pub struct Capture {
 }
 
 /// The type of a captured import or export for a [`Expression::Remap`] instruction
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CaptureType {
     /// Capture an import for the remap instructions
     Import,
     /// Capture an export for the remap instructions
     Export,
+}
+
+impl serde::Serialize for CaptureType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            CaptureType::Import => serializer.serialize_str("import"),
+            CaptureType::Export => serializer.serialize_str("export"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CaptureType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = CaptureType;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("import or export string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde_core::de::Error,
+            {
+                match v {
+                    "import" => Ok(CaptureType::Import),
+                    "export" => Ok(CaptureType::Export),
+                    other => Err(E::invalid_value(Unexpected::Str(other), &self)),
+                }
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
 }
 
 impl serde::Serialize for Capture {
@@ -379,14 +475,6 @@ impl<'de> serde::Deserialize<'de> for Expression<'de> {
             where
                 A: SeqAccess<'de>,
             {
-                #[derive(Debug, serde::Deserialize)]
-                #[serde(untagged)]
-                enum StringOrArray<'a> {
-                    #[serde(borrow)]
-                    String(Str<'a>),
-                    #[serde(borrow)]
-                    Array(Box<[Expression<'a>]>),
-                }
                 let first_value: StringOrArray = seq
                     .next_element()?
                     .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
@@ -715,5 +803,60 @@ impl<'de> serde::de::Deserialize<'de> for Message<'de> {
         }
 
         deserializer.deserialize_seq(Visitor)
+    }
+}
+
+#[derive(Debug)]
+enum StringOrArray<'a> {
+    String(Str<'a>),
+    Array(Box<[Expression<'a>]>),
+}
+
+impl<'de> serde::Deserialize<'de> for StringOrArray<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = StringOrArray<'de>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or an array")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_string(String::from(v))
+            }
+
+            fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringOrArray::String(Cow::Borrowed(v)))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringOrArray::String(Cow::Owned(v)))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut vec = Vec::<Expression>::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(element) = seq.next_element()? {
+                    vec.push(element);
+                }
+                Ok(StringOrArray::Array(vec.into_boxed_slice()))
+            }
+        }
+        deserializer.deserialize_any(Visitor)
     }
 }

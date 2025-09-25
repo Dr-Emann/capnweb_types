@@ -7,7 +7,7 @@ name = "capnweb_types"
 version = "0.2.1"
 dependencies = [
  "insta",
- "serde",
+ "serde_core",
  "serde_json",
 ]
 
@@ -96,7 +96,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dca6411025b24b60bfa7ec1fe1f8e710ac09782dca409ee8237ba74b51295fd"
 dependencies = [
  "serde_core",
- "serde_derive",
 ]
 
 [[package]]

@@ -11,12 +11,13 @@ fn main() {
     };
 
     let msg = Message::Push(expr);
-    println!("{} {}", size_of::<Expression>(), size_of::<Message>());
 
     let res = serde_json::to_string(&msg).unwrap();
-    println!("{}", res);
+    println!("{res}");
 
-    // let de: Expression = serde_json::from_str(r#"[[1, 2]]"#).unwrap();
-    let de: Message = serde_json::from_str(&res).unwrap();
-    println!("{:?}", de);
+    let serialized = r#"["push",["pipeline",0,["authenticate"],["cookie-123"]]]"#;
+    assert_eq!(serialized, res);
+
+    let deserialized: Message = serde_json::from_str(serialized).unwrap();
+    println!("{deserialized:?}");
 }

@@ -1,6 +1,6 @@
 [package]
 name = "capnweb_types"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Rust type definitions for the Cap'n Web RPC protocol"

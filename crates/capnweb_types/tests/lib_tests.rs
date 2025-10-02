@@ -1,4 +1,5 @@
-use capnweb_types::*;
+use capnweb_types::{Expression, Message};
+use capnweb_types::expression::*;
 use serde_json;
 use std::collections::BTreeMap;
 

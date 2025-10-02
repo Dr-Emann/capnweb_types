@@ -1,4 +1,5 @@
-use capnweb_types::{Expression, Message, PathSegment, ImportOperation, Resolution};
+use capnweb_types::expression::{ImportOperation, PathSegment, Resolution};
+use capnweb_types::{Expression, Message};
 
 fn main() {
     let expr = Expression::Import {
@@ -7,7 +8,7 @@ fn main() {
         operation: Some(ImportOperation::Call {
             path: vec![PathSegment::Name("authenticate".into())].into_boxed_slice(),
             args: vec![Expression::String("cookie-123".into())].into_boxed_slice(),
-        })
+        }),
     };
 
     let msg = Message::Push(expr);

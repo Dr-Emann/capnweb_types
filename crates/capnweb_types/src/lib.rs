@@ -8,6 +8,11 @@
 //!
 //! [capnweb]: https://github.com/cloudflare/capnweb
 #![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
+#![deny(unnameable_types)]
+#![deny(unsafe_code)]
+#![warn(unsafe_op_in_unsafe_fn)]
+#![warn(variant_size_differences)]
 
 use serde::de::{SeqAccess, Unexpected};
 use serde::{Deserializer, Serializer};
